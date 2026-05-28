@@ -155,27 +155,52 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showingCreateSheet) {
-            CreatePostSheet { draft in
-                let newPost = Post(
-                    id: UUID(),
-                    artistID: SeedData.currentArtist.id,
-                    title: draft.title,
-                    caption: draft.story,
-                    genre: draft.genre,
-                    mood: draft.mood,
-                    hashtags: [draft.mood.rawValue, draft.genre.rawValue],
-                    coverHeight: 220,
-                    coverImageData: draft.coverImageData,
-                    audioURL: draft.audioURL,
-                    audioTitle: draft.audioTitle,
-                    audioDuration: draft.audioDuration,
-                    bloopers: draft.bloopers,
-                    trackVersions: draft.trackVersions,
-                    isLandscape: draft.isLandscape
-                )
-                posts.insert(newPost, at: 0)
-                commentsByPost[newPost.id] = []
-            }
+            CreatePostSheet(
+                onPost: { draft in
+                    let newPost = Post(
+                        id: UUID(),
+                        artistID: SeedData.currentArtist.id,
+                        title: draft.title,
+                        caption: draft.story,
+                        genre: draft.genre,
+                        mood: draft.mood,
+                        hashtags: [draft.mood.rawValue, draft.genre.rawValue],
+                        coverHeight: 220,
+                        coverImageData: draft.coverImageData,
+                        audioURL: draft.audioURL,
+                        audioTitle: draft.audioTitle,
+                        audioDuration: draft.audioDuration,
+                        bloopers: draft.bloopers,
+                        trackVersions: draft.trackVersions,
+                        isLandscape: draft.isLandscape,
+                        isCollage: false
+                    )
+                    posts.insert(newPost, at: 0)
+                    commentsByPost[newPost.id] = []
+                },
+                onCollagePost: { imageData in
+                    let newPost = Post(
+                        id: UUID(),
+                        artistID: SeedData.currentArtist.id,
+                        title: "Collage",
+                        caption: "collage",
+                        genre: .electronic,
+                        mood: .process,
+                        hashtags: ["collage"],
+                        coverHeight: 220,
+                        coverImageData: imageData,
+                        audioURL: nil,
+                        audioTitle: nil,
+                        audioDuration: nil,
+                        bloopers: [],
+                        trackVersions: [],
+                        isLandscape: false,
+                        isCollage: true
+                    )
+                    posts.insert(newPost, at: 0)
+                    commentsByPost[newPost.id] = []
+                }
+            )
         }
         .preferredColorScheme(.dark)
     }
@@ -565,6 +590,18 @@ private struct FeedCoverImageView: View {
                 endPoint: .bottom
             )
             .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            if post.isCollage {
+                Text("collage")
+                    .font(.inter(.medium, size: 11))
+                    .foregroundStyle(AppPalette.background)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 3)
+                    .background(AppPalette.peach)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .padding(8)
+            }
         }
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -2112,8 +2149,15 @@ private struct CreatePostDraft {
     let isLandscape: Bool
 }
 
+private enum CreatePostFlow {
+    case post
+    case collage
+}
+
 private struct CreatePostSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedFlow: CreatePostFlow = .post
+    @State private var showingCollageCreator = false
     @State private var coverPickerItem: PhotosPickerItem?
     @State private var coverImageData: Data?
     @State private var title = ""
@@ -2131,6 +2175,7 @@ private struct CreatePostSheet: View {
     @State private var isLandscape = false
 
     let onPost: (CreatePostDraft) -> Void
+    let onCollagePost: (Data) -> Void
 
     private var isFormValid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -2150,6 +2195,28 @@ private struct CreatePostSheet: View {
                         .foregroundStyle(AppPalette.text)
                         .padding(.top, 56)
 
+                    HStack(spacing: 12) {
+                        createTypeCard(
+                            icon: "photo.on.rectangle",
+                            title: "Post",
+                            subtitle: "photo · track · story",
+                            isSelected: selectedFlow == .post
+                        ) {
+                            selectedFlow = .post
+                        }
+
+                        createTypeCard(
+                            icon: "square.grid.2x2",
+                            title: "Collage",
+                            subtitle: "mix · layer · compose",
+                            isSelected: selectedFlow == .collage
+                        ) {
+                            selectedFlow = .collage
+                            showingCollageCreator = true
+                        }
+                    }
+
+                    if selectedFlow == .post {
                     LabeledField(label: "Cover Image") {
                         PhotosPicker(selection: $coverPickerItem, matching: .images) {
                             HStack {
@@ -2415,8 +2482,9 @@ private struct CreatePostSheet: View {
                             }
                         }
                     }
+                    }
 
-                    if !isFormValid {
+                    if selectedFlow == .post && !isFormValid {
                         Text("story is required before posting")
                             .font(.inter(.medium, size: 13))
                             .foregroundStyle(AppPalette.peach)
@@ -2426,6 +2494,7 @@ private struct CreatePostSheet: View {
                 .padding(.horizontal, 16)
             }
 
+            if selectedFlow == .post {
             HStack {
                 Button {
                     dismiss()
@@ -2477,6 +2546,16 @@ private struct CreatePostSheet: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 16)
+            }
+        }
+        .fullScreenCover(isPresented: $showingCollageCreator, onDismiss: {
+            selectedFlow = .post
+        }) {
+            CollageCreatorView { imageData in
+                onCollagePost(imageData)
+                showingCollageCreator = false
+                dismiss()
+            }
         }
         .preferredColorScheme(.dark)
         .presentationDetents([.large])
@@ -2509,6 +2588,38 @@ private struct CreatePostSheet: View {
                 trackVersions.append(version)
             }
         }
+    }
+
+    private func createTypeCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundStyle(AppPalette.lavender)
+                Text(title)
+                    .font(.inter(.semibold, size: 16))
+                    .foregroundStyle(AppPalette.text)
+                Text(subtitle)
+                    .font(.inter(.regular, size: 11))
+                    .foregroundStyle(AppPalette.tertiaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 90)
+            .padding(.horizontal, 14)
+            .background(AppPalette.card)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? AppPalette.lavender : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2607,7 +2718,7 @@ private struct AddVersionSheet: View {
 
 // MARK: - Audio Document Picker
 
-private struct AudioDocumentPicker: UIViewControllerRepresentable {
+struct AudioDocumentPicker: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
@@ -2872,6 +2983,7 @@ private struct Post: Identifiable, Hashable {
     var bloopers: [BlooperItem]
     var trackVersions: [TrackVersion]
     var isLandscape: Bool
+    var isCollage: Bool
 
     var hasAudio: Bool {
         audioURL != nil || audioTitle != nil
@@ -3022,7 +3134,8 @@ private enum SeedData {
             audioDuration: seedAudio.2,
             bloopers: testBloopers,
             trackVersions: testVersions,
-            isLandscape: false
+            isLandscape: false,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3039,7 +3152,8 @@ private enum SeedData {
             audioDuration: seedAudio.2,
             bloopers: testBloopers,
             trackVersions: testVersions,
-            isLandscape: true
+            isLandscape: true,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3056,7 +3170,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: false
+            isLandscape: false,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3073,7 +3188,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: true
+            isLandscape: true,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3090,7 +3206,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: false
+            isLandscape: false,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3107,7 +3224,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: false
+            isLandscape: false,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3124,7 +3242,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: true
+            isLandscape: true,
+            isCollage: false
         ),
         Post(
             id: UUID(),
@@ -3141,7 +3260,8 @@ private enum SeedData {
             audioDuration: nil,
             bloopers: [],
             trackVersions: [],
-            isLandscape: false
+            isLandscape: false,
+            isCollage: false
         )
     ]
     }()
@@ -3165,7 +3285,7 @@ private enum SeedData {
 
 // MARK: - Palette / Helpers
 
-private enum AppPalette {
+enum AppPalette {
     static let background = Color(hex: "0D0D10")
     static let card = Color(hex: "1A1A22")
     static let text = Color(hex: "F0F0F2")
@@ -3196,7 +3316,7 @@ private extension UUID {
     }
 }
 
-private extension Font {
+extension Font {
     enum InterWeight {
         case regular
         case medium
