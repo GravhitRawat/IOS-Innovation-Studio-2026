@@ -170,6 +170,7 @@ struct ContentView: View {
                     audioTitle: draft.audioTitle,
                     audioDuration: draft.audioDuration,
                     bloopers: draft.bloopers,
+                    trackVersions: draft.trackVersions,
                     isLandscape: draft.isLandscape
                 )
                 posts.insert(newPost, at: 0)
@@ -280,6 +281,11 @@ private struct FeedView: View {
     let onSelect: (Post) -> Void
     let onArtistTap: (Artist) -> Void
     @State private var selectedGenre: Genre = .all
+    @State private var longPressedPost: Post?
+    @State private var longPressPlaybackProgress: Double = 0
+    @State private var longPressIsPlaying = false
+    @State private var longPressTimer: Timer?
+    @State private var overlayImagePulse = false
 
     private var filteredPosts: [Post] {
         if selectedGenre == .all {
@@ -297,66 +303,171 @@ private struct FeedView: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(AppPalette.card)
-                        .frame(width: 32, height: 32)
-                        .overlay(
-                            Image(systemName: "waveform.circle.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(AppPalette.lavender)
-                        )
-
-                    Text("underground")
-                        .font(.inter(.semibold, size: 17))
-                        .foregroundStyle(AppPalette.text)
-                }
-                .padding(.top, 8)
-
-                ScrollView(.horizontal, showsIndicators: false) {
+        ZStack {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
                     HStack(spacing: 10) {
-                        ForEach(Genre.allCases) { genre in
-                            Button {
-                                withAnimation(AppPalette.springStandard) {
-                                    selectedGenre = genre
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(AppPalette.card)
+                            .frame(width: 32, height: 32)
+                            .overlay(
+                                Image(systemName: "waveform.circle.fill")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(AppPalette.lavender)
+                            )
+
+                        Text("underground")
+                            .font(.inter(.semibold, size: 17))
+                            .foregroundStyle(AppPalette.text)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 14)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Genre.allCases) { genre in
+                                Button {
+                                    withAnimation(AppPalette.springStandard) {
+                                        selectedGenre = genre
+                                    }
+                                } label: {
+                                    Text(genre.label)
+                                        .font(.inter(.medium, size: 13))
+                                        .foregroundStyle(selectedGenre == genre ? AppPalette.background : AppPalette.text)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(selectedGenre == genre ? AppPalette.lavender : AppPalette.card)
+                                        .clipShape(Capsule())
                                 }
-                            } label: {
-                                Text(genre.label)
-                                    .font(.inter(.medium, size: 13))
-                                    .foregroundStyle(selectedGenre == genre ? AppPalette.background : AppPalette.text)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(selectedGenre == genre ? AppPalette.lavender : AppPalette.card)
-                                    .clipShape(Capsule())
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 12)
                     }
-                }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 14)
 
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(spacing: 12) {
-                        ForEach(leftColumn) { post in
-                            if let artist = artists.first(where: { $0.id == post.artistID }) {
-                                PostCardView(post: post, artist: artist, onTap: onSelect, onArtistTap: onArtistTap)
+                    HStack(alignment: .top, spacing: 12) {
+                        LazyVStack(spacing: 12) {
+                            ForEach(leftColumn) { post in
+                                if let artist = artists.first(where: { $0.id == post.artistID }) {
+                                    PostCardView(
+                                        post: post,
+                                        artist: artist,
+                                        onTap: onSelect,
+                                        onArtistTap: onArtistTap,
+                                        onLongPressStart: { startLongPressOverlay(for: post) },
+                                        onLongPressEnd: { endLongPressOverlay() }
+                                    )
+                                }
                             }
                         }
-                    }
+                        .frame(maxWidth: .infinity)
 
-                    VStack(spacing: 12) {
-                        ForEach(rightColumn) { post in
-                            if let artist = artists.first(where: { $0.id == post.artistID }) {
-                                PostCardView(post: post, artist: artist, onTap: onSelect, onArtistTap: onArtistTap)
+                        LazyVStack(spacing: 12) {
+                            ForEach(rightColumn) { post in
+                                if let artist = artists.first(where: { $0.id == post.artistID }) {
+                                    PostCardView(
+                                        post: post,
+                                        artist: artist,
+                                        onTap: onSelect,
+                                        onArtistTap: onArtistTap,
+                                        onLongPressStart: { startLongPressOverlay(for: post) },
+                                        onLongPressEnd: { endLongPressOverlay() }
+                                    )
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 20)
                 }
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity)
+
+            if let longPressedPost,
+               let artist = artists.first(where: { $0.id == longPressedPost.artistID }) {
+                FeedLongPressOverlay(
+                    post: longPressedPost,
+                    artist: artist,
+                    playbackProgress: longPressPlaybackProgress,
+                    isPlaying: longPressIsPlaying,
+                    imagePulse: overlayImagePulse,
+                    onTogglePlay: { toggleLongPressPlayback() }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                .zIndex(10)
+            }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: longPressedPost?.id)
+        .onChange(of: longPressedPost?.id) { _, newID in
+            if newID != nil {
+                overlayImagePulse = true
+                startLongPressPlayback()
+            } else {
+                overlayImagePulse = false
+            }
+        }
+    }
+
+    private func startLongPressOverlay(for post: Post) {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+            longPressedPost = post
+        }
+    }
+
+    private func endLongPressOverlay() {
+        stopLongPressTimer()
+        longPressPlaybackProgress = 0
+        longPressIsPlaying = false
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+            longPressedPost = nil
+        }
+    }
+
+    private func startLongPressPlayback() {
+        guard longPressedPost != nil else { return }
+        longPressPlaybackProgress = 0
+        longPressIsPlaying = true
+        startLongPressTimer()
+    }
+
+    private func toggleLongPressPlayback() {
+        if longPressIsPlaying {
+            stopLongPressTimer()
+            longPressIsPlaying = false
+        } else {
+            if longPressPlaybackProgress >= 1.0 {
+                longPressPlaybackProgress = 0
+            }
+            longPressIsPlaying = true
+            startLongPressTimer()
+        }
+    }
+
+    private func startLongPressTimer() {
+        stopLongPressTimer()
+        let duration = longPressedPost?.audioDuration ?? 214
+        longPressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            let increment = 0.1 / duration
+            if longPressPlaybackProgress + increment >= 1.0 {
+                stopLongPressTimer()
+                longPressIsPlaying = false
+                longPressPlaybackProgress = 0
+            } else {
+                longPressPlaybackProgress += increment
+            }
+        }
+    }
+
+    private func stopLongPressTimer() {
+        longPressTimer?.invalidate()
+        longPressTimer = nil
     }
 }
 
@@ -365,6 +476,8 @@ private struct PostCardView: View {
     let artist: Artist
     let onTap: (Post) -> Void
     let onArtistTap: (Artist) -> Void
+    let onLongPressStart: () -> Void
+    let onLongPressEnd: () -> Void
     @State private var pressed = false
 
     var body: some View {
@@ -378,12 +491,24 @@ private struct PostCardView: View {
                     onTap(post)
                 }
             } label: {
-                PostCoverImageView(imageData: post.coverImageData, height: post.coverHeight)
+                FeedCoverImageView(post: post, height: post.coverHeight)
             }
             .buttonStyle(.plain)
             .scaleEffect(pressed ? 0.97 : 1.0)
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in
+                        onLongPressStart()
+                    }
+            )
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { _ in
+                        onLongPressEnd()
+                    }
+            )
 
-            if post.audioURL != nil {
+            if post.audioURL != nil || post.audioDuration != nil {
                 CompactPlayerBar(post: post)
             }
 
@@ -408,6 +533,162 @@ private struct PostCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AppPalette.card)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct FeedCoverImageView: View {
+    let post: Post
+    let height: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Group {
+                if let imageData = post.coverImageData, let uiImage = UIImage(data: imageData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    RemoteImageView(
+                        query: genreQuery(for: post.genre.label),
+                        width: 400,
+                        height: 500
+                    )
+                }
+            }
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .clipped()
+
+            LinearGradient(
+                colors: [.clear, Color(hex: "0D0D10").opacity(0.85)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+        }
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct FeedLongPressOverlay: View {
+    let post: Post
+    let artist: Artist
+    let playbackProgress: Double
+    let isPlaying: Bool
+    let imagePulse: Bool
+    let onTogglePlay: () -> Void
+    @State private var hintOpacity = 0.5
+    @State private var playButtonScale: CGFloat = 1.0
+
+    private var hasAudio: Bool {
+        post.audioURL != nil || post.audioDuration != nil
+    }
+
+    private var audioDuration: TimeInterval {
+        post.audioDuration ?? 214
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+
+            Color.black.opacity(0.92)
+                .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Spacer()
+
+                Group {
+                    if let imageData = post.coverImageData, let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        RemoteImageView(
+                            query: genreQuery(for: post.genre.label),
+                            width: 300,
+                            height: 300
+                        )
+                    }
+                }
+                .frame(width: 300, height: 300)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.6), radius: 20)
+                .scaleEffect(imagePulse ? 1.04 : 1.0)
+                .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: imagePulse)
+
+                Text(post.title)
+                    .font(.inter(.bold, size: 22))
+                    .foregroundStyle(AppPalette.text)
+                    .multilineTextAlignment(.center)
+
+                Text(artist.name)
+                    .font(.inter(.regular, size: 15))
+                    .foregroundStyle(AppPalette.secondaryText)
+
+                Chip(text: post.genre.label, background: AppPalette.lavender, foreground: AppPalette.background)
+
+                if hasAudio {
+                    VStack(spacing: 12) {
+                        DetailWaveformVisualiser(isPlaying: isPlaying)
+                            .frame(width: 220)
+
+                        GeometryReader { proxy in
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(AppPalette.trackBackground)
+                                    .frame(height: 3)
+                                Capsule()
+                                    .fill(AppPalette.lavender)
+                                    .frame(width: max(0, proxy.size.width * playbackProgress), height: 3)
+                                    .animation(.linear(duration: 0.1), value: playbackProgress)
+                            }
+                        }
+                        .frame(height: 3)
+                        .frame(width: 220)
+
+                        Button {
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                playButtonScale = 0.85
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                    playButtonScale = 1.0
+                                }
+                            }
+                            onTogglePlay()
+                        } label: {
+                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 44))
+                                .foregroundStyle(AppPalette.lavender)
+                                .scaleEffect(playButtonScale)
+                        }
+                        .buttonStyle(.plain)
+
+                        Text("\(formatTime(playbackProgress * audioDuration)) / \(formatTime(audioDuration))")
+                            .font(.inter(.regular, size: 12))
+                            .foregroundStyle(AppPalette.secondaryText)
+                    }
+                    .padding(.top, 8)
+                }
+
+                Spacer()
+
+                Text("release to close")
+                    .font(.inter(.regular, size: 12))
+                    .foregroundStyle(AppPalette.tertiaryText)
+                    .opacity(hintOpacity)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+                            hintOpacity = 1.0
+                        }
+                    }
+            }
+            .padding(.horizontal, 24)
+        }
     }
 }
 
@@ -528,9 +809,12 @@ private struct PostDetailView: View {
     let onSaveTap: () -> Void
     let onArtistTap: (Artist) -> Void
     let onAddComment: (String) -> Void
-    @ObservedObject private var audioManager = AudioPlayerManager.shared
     @State private var commentDraft = ""
     @State private var fullscreenBlooper: BlooperItem?
+    @State private var activeVersionID: UUID?
+    @State private var versionProgress: Double = 0
+    @State private var versionIsPlaying = false
+    @State private var versionTimer: Timer?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -625,6 +909,16 @@ private struct PostDetailView: View {
                         }
                     }
 
+                    if !post.trackVersions.isEmpty {
+                        VersionHistorySection(
+                            versions: post.trackVersions,
+                            activeVersionID: $activeVersionID,
+                            versionProgress: $versionProgress,
+                            versionIsPlaying: $versionIsPlaying,
+                            versionTimer: $versionTimer
+                        )
+                    }
+
                     if !post.bloopers.isEmpty {
                         BloopersSection(bloopers: post.bloopers) { item in
                             fullscreenBlooper = item
@@ -673,33 +967,24 @@ private struct PostDetailView: View {
 
 private struct PostDetailMusicPlayer: View {
     let post: Post
-    @ObservedObject private var audioManager = AudioPlayerManager.shared
+    @State private var playbackProgress: Double = 0
+    @State private var isPlaying = false
     @State private var isScrubbing = false
     @State private var scrubProgress: Double = 0
+    @State private var playButtonScale: CGFloat = 1.0
+    @State private var playbackTimer: Timer?
+    @State private var wasPlayingBeforeScrub = false
 
-    private var isActivePost: Bool {
-        audioManager.currentPostID == post.id
-    }
-
-    private var isPlaying: Bool {
-        isActivePost && audioManager.isPlaying
-    }
-
-    private var totalDuration: TimeInterval {
-        if isActivePost, audioManager.duration > 0 {
-            return audioManager.duration
-        }
-        return post.audioDuration ?? 0
+    private var audioDuration: TimeInterval {
+        post.audioDuration ?? 214
     }
 
     private var displayProgress: Double {
-        if isScrubbing { return scrubProgress }
-        if isActivePost { return audioManager.playbackProgress }
-        return 0
+        isScrubbing ? scrubProgress : playbackProgress
     }
 
     private var currentTime: TimeInterval {
-        displayProgress * totalDuration
+        displayProgress * audioDuration
     }
 
     private var trackTitle: String {
@@ -720,7 +1005,7 @@ private struct PostDetailMusicPlayer: View {
 
                 Spacer()
 
-                Text(formatTime(totalDuration))
+                Text(formatTime(audioDuration))
                     .font(.inter(.regular, size: 12))
                     .foregroundStyle(AppPalette.secondaryText)
             }
@@ -732,30 +1017,43 @@ private struct PostDetailMusicPlayer: View {
                     Capsule()
                         .fill(AppPalette.trackBackground)
                         .frame(height: 3)
+
                     Capsule()
                         .fill(AppPalette.lavender)
                         .frame(width: max(0, proxy.size.width * displayProgress), height: 3)
+                        .animation(.linear(duration: 0.1), value: displayProgress)
+
+                    Circle()
+                        .fill(AppPalette.lavender)
+                        .frame(width: 10, height: 10)
+                        .shadow(color: .black.opacity(0.3), radius: 4)
+                        .offset(x: max(0, proxy.size.width * displayProgress - 5))
+                        .animation(.linear(duration: 0.1), value: displayProgress)
                 }
-                .frame(height: 3)
+                .frame(height: 10)
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            if !isScrubbing {
+                                wasPlayingBeforeScrub = isPlaying
+                                stopTimer()
+                                isPlaying = false
+                            }
                             isScrubbing = true
                             scrubProgress = min(1, max(0, value.location.x / proxy.size.width))
                         }
                         .onEnded { _ in
                             isScrubbing = false
-                            if post.audioURL != nil {
-                                if !isActivePost, let url = post.audioURL {
-                                    audioManager.play(url: url, postID: post.id)
-                                }
-                                audioManager.seek(to: scrubProgress)
+                            playbackProgress = scrubProgress
+                            if wasPlayingBeforeScrub {
+                                isPlaying = true
+                                startTimer()
                             }
                         }
                 )
             }
-            .frame(height: 12)
+            .frame(height: 14)
 
             HStack {
                 Text(formatTime(currentTime))
@@ -764,22 +1062,24 @@ private struct PostDetailMusicPlayer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button {
-                    withAnimation(.spring(response: 0.3)) {
-                        if isActivePost && audioManager.isPlaying {
-                            audioManager.pause()
-                        } else if let url = post.audioURL {
-                            audioManager.play(url: url, postID: post.id)
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                        playButtonScale = 0.85
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                            playButtonScale = 1.0
                         }
                     }
+                    togglePlayback()
                 } label: {
                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 52))
                         .foregroundStyle(AppPalette.lavender)
+                        .scaleEffect(playButtonScale)
                 }
                 .buttonStyle(.plain)
-                .disabled(post.audioURL == nil)
 
-                Text(formatTime(totalDuration))
+                Text(formatTime(audioDuration))
                     .font(.inter(.regular, size: 12))
                     .foregroundStyle(AppPalette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -789,6 +1089,41 @@ private struct PostDetailMusicPlayer: View {
         .padding(.vertical, 14)
         .background(AppPalette.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onDisappear {
+            stopTimer()
+        }
+    }
+
+    private func togglePlayback() {
+        if isPlaying {
+            stopTimer()
+            isPlaying = false
+        } else {
+            if playbackProgress >= 1.0 {
+                playbackProgress = 0
+            }
+            isPlaying = true
+            startTimer()
+        }
+    }
+
+    private func startTimer() {
+        stopTimer()
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            let increment = 0.1 / audioDuration
+            if playbackProgress + increment >= 1.0 {
+                stopTimer()
+                isPlaying = false
+                playbackProgress = 0
+            } else {
+                playbackProgress += increment
+            }
+        }
+    }
+
+    private func stopTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = nil
     }
 }
 
@@ -802,7 +1137,7 @@ private struct DetailWaveformVisualiser: View {
                 DetailWaveformBar(index: index, isPlaying: isPlaying)
             }
         }
-        .frame(height: 28)
+        .frame(height: 32)
         .frame(maxWidth: .infinity)
     }
 }
@@ -810,7 +1145,21 @@ private struct DetailWaveformVisualiser: View {
 private struct DetailWaveformBar: View {
     let index: Int
     let isPlaying: Bool
+
+    private let minHeight: CGFloat
+    private let maxHeight: CGFloat
+    private let animDuration: Double
+
     @State private var height: CGFloat = 4
+
+    init(index: Int, isPlaying: Bool) {
+        self.index = index
+        self.isPlaying = isPlaying
+        var generator = SeededGenerator(seed: UInt64(index + 1))
+        minHeight = CGFloat.random(in: 4...8, using: &generator)
+        maxHeight = CGFloat.random(in: 16...32, using: &generator)
+        animDuration = Double.random(in: 0.3...0.7, using: &generator)
+    }
 
     private var barColor: Color {
         isPlaying ? AppPalette.lavender : AppPalette.barMuted
@@ -820,25 +1169,210 @@ private struct DetailWaveformBar: View {
         RoundedRectangle(cornerRadius: 1, style: .continuous)
             .fill(barColor)
             .frame(width: 2, height: height)
-            .onAppear { configureAnimation() }
-            .onChange(of: isPlaying) { _, playing in
-                if playing {
-                    configureAnimation()
-                } else {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        height = 4
-                    }
-                }
+            .animation(
+                .easeInOut(duration: animDuration)
+                    .repeatForever(autoreverses: true)
+                    .delay(Double(index) * 0.04),
+                value: isPlaying
+            )
+            .onAppear { updateHeight() }
+            .onChange(of: isPlaying) { _, _ in
+                updateHeight()
             }
     }
 
-    private func configureAnimation() {
-        guard isPlaying else { return }
-        let duration = 0.3 + Double(index % 6) * 0.08
-        let target = CGFloat(12 + (index % 5) * 3)
-        withAnimation(.easeInOut(duration: duration).repeatForever(autoreverses: true)) {
-            height = target
+    private func updateHeight() {
+        if isPlaying {
+            height = minHeight
+            withAnimation(
+                .easeInOut(duration: animDuration)
+                    .repeatForever(autoreverses: true)
+                    .delay(Double(index) * 0.04)
+            ) {
+                height = maxHeight
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.25)) {
+                height = 4
+            }
         }
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed == 0 ? 1 : seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+}
+
+// MARK: - Version History
+
+private struct VersionHistorySection: View {
+    let versions: [TrackVersion]
+    @Binding var activeVersionID: UUID?
+    @Binding var versionProgress: Double
+    @Binding var versionIsPlaying: Bool
+    @Binding var versionTimer: Timer?
+
+    private var versionCountLabel: String {
+        "\(versions.count) version\(versions.count == 1 ? "" : "s")"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack(spacing: 6) {
+                    Text("🎵")
+                        .font(.system(size: 17))
+                    Text("Version History")
+                        .font(.inter(.semibold, size: 17))
+                        .foregroundStyle(AppPalette.text)
+                }
+
+                Spacer()
+
+                Text(versionCountLabel)
+                    .font(.inter(.regular, size: 13))
+                    .foregroundStyle(AppPalette.secondaryText)
+            }
+
+            VStack(spacing: 10) {
+                ForEach(versions) { version in
+                    VersionHistoryCard(
+                        version: version,
+                        isActive: activeVersionID == version.id,
+                        isPlaying: activeVersionID == version.id && versionIsPlaying,
+                        progress: activeVersionID == version.id ? versionProgress : 0,
+                        onSelect: {
+                            activeVersionID = version.id
+                            stopVersionTimer()
+                            versionIsPlaying = false
+                            versionProgress = 0
+                        },
+                        onTogglePlay: {
+                            toggleVersionPlayback(version)
+                        }
+                    )
+                }
+            }
+        }
+        .onDisappear {
+            stopVersionTimer()
+        }
+    }
+
+    private func toggleVersionPlayback(_ version: TrackVersion) {
+        if activeVersionID == version.id && versionIsPlaying {
+            stopVersionTimer()
+            versionIsPlaying = false
+            return
+        }
+
+        if activeVersionID != version.id {
+            versionProgress = 0
+        } else if versionProgress >= 1.0 {
+            versionProgress = 0
+        }
+
+        activeVersionID = version.id
+        versionIsPlaying = true
+        startVersionTimer(duration: version.duration)
+    }
+
+    private func startVersionTimer(duration: TimeInterval) {
+        stopVersionTimer()
+        versionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            let increment = 0.1 / duration
+            if versionProgress + increment >= 1.0 {
+                stopVersionTimer()
+                versionIsPlaying = false
+                versionProgress = 0
+            } else {
+                versionProgress += increment
+            }
+        }
+    }
+
+    private func stopVersionTimer() {
+        versionTimer?.invalidate()
+        versionTimer = nil
+    }
+}
+
+private struct VersionHistoryCard: View {
+    let version: TrackVersion
+    let isActive: Bool
+    let isPlaying: Bool
+    let progress: Double
+    let onSelect: () -> Void
+    let onTogglePlay: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(version.versionLabel)
+                    .font(.inter(.medium, size: 12))
+                    .foregroundStyle(AppPalette.lavender)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(AppPalette.trackBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                Text(version.title)
+                    .font(.inter(.bold, size: 15))
+                    .foregroundStyle(AppPalette.text)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(formatTime(version.duration))
+                    .font(.inter(.regular, size: 12))
+                    .foregroundStyle(AppPalette.secondaryText)
+            }
+
+            HStack(spacing: 10) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(AppPalette.trackBackground)
+                            .frame(height: 2)
+                        Capsule()
+                            .fill(AppPalette.lavender)
+                            .frame(width: max(0, proxy.size.width * progress), height: 2)
+                            .animation(.linear(duration: 0.1), value: progress)
+                    }
+                }
+                .frame(height: 2)
+
+                Button(action: onTogglePlay) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(AppPalette.lavender)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isActive ? AppPalette.lavender.opacity(0.35) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture(perform: onSelect)
     }
 }
 
@@ -1196,25 +1730,25 @@ private struct PortraitPostCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottomLeading) {
-                    if let data = post.coverImageData, let image = UIImage(data: data) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 160, height: 220)
-                            .clipped()
-                    } else {
-                        Rectangle()
-                            .fill(AppPalette.card)
-                            .frame(width: 160, height: 220)
-                            .overlay(
-                                Image(systemName: "photo.on.rectangle")
-                                    .foregroundStyle(AppPalette.secondaryText)
+                    Group {
+                        if let data = post.coverImageData, let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            RemoteImageView(
+                                query: genreQuery(for: post.genre.label),
+                                width: 320,
+                                height: 440
                             )
+                        }
                     }
+                    .frame(width: 160, height: 220)
+                    .clipped()
 
                     LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.6)],
-                        startPoint: .top,
+                        colors: [.clear, Color(hex: "0D0D10").opacity(0.85)],
+                        startPoint: .center,
                         endPoint: .bottom
                     )
 
@@ -1228,7 +1762,7 @@ private struct PortraitPostCard: View {
                     .padding(10)
                 }
                 .frame(width: 160, height: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
         }
         .buttonStyle(.plain)
@@ -1243,25 +1777,25 @@ private struct LandscapePostCard: View {
     var body: some View {
         Button(action: onTap) {
             ZStack(alignment: .bottomLeading) {
-                if let data = post.coverImageData, let image = UIImage(data: data) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 320, height: 180)
-                        .clipped()
-                } else {
-                    Rectangle()
-                        .fill(AppPalette.card)
-                        .frame(width: 320, height: 180)
-                        .overlay(
-                            Image(systemName: "photo.on.rectangle")
-                                .foregroundStyle(AppPalette.secondaryText)
+                Group {
+                    if let data = post.coverImageData, let image = UIImage(data: data) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        RemoteImageView(
+                            query: genreQuery(for: post.genre.label),
+                            width: 640,
+                            height: 360
                         )
+                    }
                 }
+                .frame(width: 320, height: 180)
+                .clipped()
 
                 LinearGradient(
-                    colors: [Color.clear, Color.black.opacity(0.65)],
-                    startPoint: .top,
+                    colors: [.clear, Color(hex: "0D0D10").opacity(0.85)],
+                    startPoint: .center,
                     endPoint: .bottom
                 )
 
@@ -1277,7 +1811,7 @@ private struct LandscapePostCard: View {
                 .padding(12)
             }
             .frame(width: 320, height: 180)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -1574,6 +2108,7 @@ private struct CreatePostDraft {
     let audioTitle: String?
     let audioDuration: TimeInterval?
     let bloopers: [BlooperItem]
+    let trackVersions: [TrackVersion]
     let isLandscape: Bool
 }
 
@@ -1591,6 +2126,8 @@ private struct CreatePostSheet: View {
     @State private var showingAudioPicker = false
     @State private var blooperPickerItems: [PhotosPickerItem] = []
     @State private var bloopers: [BlooperItem] = []
+    @State private var trackVersions: [TrackVersion] = []
+    @State private var showingAddVersionSheet = false
     @State private var isLandscape = false
 
     let onPost: (CreatePostDraft) -> Void
@@ -1739,6 +2276,65 @@ private struct CreatePostSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
+                        Text("Version History")
+                            .font(.inter(.semibold, size: 14))
+                            .foregroundStyle(AppPalette.text)
+
+                        if !trackVersions.isEmpty {
+                            VStack(spacing: 8) {
+                                ForEach(trackVersions) { version in
+                                    HStack(spacing: 8) {
+                                        Text(version.versionLabel)
+                                            .font(.inter(.medium, size: 12))
+                                            .foregroundStyle(AppPalette.lavender)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(AppPalette.trackBackground)
+                                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                                        Text(version.title)
+                                            .font(.inter(.medium, size: 13))
+                                            .foregroundStyle(AppPalette.text)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        Button {
+                                            trackVersions.removeAll { $0.id == version.id }
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(AppPalette.secondaryText)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(10)
+                                    .background(AppPalette.card)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                            }
+                        }
+
+                        Button {
+                            showingAddVersionSheet = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(AppPalette.lavender)
+                                Text("Add another version")
+                                    .font(.inter(.medium, size: 14))
+                                    .foregroundStyle(AppPalette.lavender)
+                                Spacer()
+                            }
+                            .padding(12)
+                            .background(AppPalette.card)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 Text("🎬")
@@ -1862,6 +2458,7 @@ private struct CreatePostSheet: View {
                             audioTitle: audioTitle,
                             audioDuration: audioDuration,
                             bloopers: bloopers,
+                            trackVersions: trackVersions,
                             isLandscape: isLandscape
                         )
                     )
@@ -1905,6 +2502,104 @@ private struct CreatePostSheet: View {
                 audioTitle = url.deletingPathExtension().lastPathComponent
                 let asset = AVURLAsset(url: url)
                 audioDuration = CMTimeGetSeconds(asset.duration)
+            }
+        }
+        .sheet(isPresented: $showingAddVersionSheet) {
+            AddVersionSheet { version in
+                trackVersions.append(version)
+            }
+        }
+    }
+}
+
+private struct AddVersionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var versionLabel = ""
+    @State private var versionTitle = ""
+    @State private var audioURL: URL?
+    @State private var audioDuration: TimeInterval = 214
+    @State private var showingAudioPicker = false
+
+    let onAdd: (TrackVersion) -> Void
+
+    var body: some View {
+        ZStack {
+            AppPalette.background.ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Button("Cancel") { dismiss() }
+                        .font(.inter(.medium, size: 14))
+                        .foregroundStyle(AppPalette.secondaryText)
+                    Spacer()
+                    Text("Add Version")
+                        .font(.inter(.semibold, size: 16))
+                        .foregroundStyle(AppPalette.text)
+                    Spacer()
+                    Button("Add") {
+                        onAdd(
+                            TrackVersion(
+                                title: versionTitle,
+                                duration: audioDuration,
+                                audioURL: audioURL,
+                                versionLabel: versionLabel
+                            )
+                        )
+                        dismiss()
+                    }
+                    .font(.inter(.semibold, size: 14))
+                    .foregroundStyle(AppPalette.lavender)
+                    .disabled(versionLabel.trimmingCharacters(in: .whitespaces).isEmpty || versionTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(.top, 20)
+
+                LabeledField(label: "Version Label") {
+                    TextField("e.g. Demo v1", text: $versionLabel)
+                        .font(.inter(.regular, size: 14))
+                        .foregroundStyle(AppPalette.text)
+                        .padding(12)
+                        .background(AppPalette.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+
+                LabeledField(label: "Title") {
+                    TextField("Track title", text: $versionTitle)
+                        .font(.inter(.regular, size: 14))
+                        .foregroundStyle(AppPalette.text)
+                        .padding(12)
+                        .background(AppPalette.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+
+                Button {
+                    showingAudioPicker = true
+                } label: {
+                    HStack {
+                        Image(systemName: "waveform")
+                            .foregroundStyle(AppPalette.lavender)
+                        Text(audioURL == nil ? "Pick audio file" : "Audio selected")
+                            .font(.inter(.medium, size: 14))
+                            .foregroundStyle(AppPalette.text)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(AppPalette.secondaryText)
+                    }
+                    .padding(12)
+                    .background(AppPalette.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+        }
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $showingAudioPicker) {
+            AudioDocumentPicker { url in
+                audioURL = url
+                let seconds = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+                audioDuration = seconds.isFinite && seconds > 0 ? seconds : 214
             }
         }
     }
@@ -2175,11 +2870,20 @@ private struct Post: Identifiable, Hashable {
     var audioTitle: String?
     var audioDuration: TimeInterval?
     var bloopers: [BlooperItem]
+    var trackVersions: [TrackVersion]
     var isLandscape: Bool
 
     var hasAudio: Bool {
         audioURL != nil || audioTitle != nil
     }
+}
+
+struct TrackVersion: Identifiable, Hashable, Codable {
+    var id: UUID = UUID()
+    var title: String
+    var duration: TimeInterval
+    var audioURL: URL?
+    var versionLabel: String
 }
 
 struct BlooperItem: Identifiable, Hashable, Codable {
@@ -2274,6 +2978,14 @@ private func makeSeedAudio() -> (URL?, String?, TimeInterval?) {
     return (nil, "late night session", 214)
 }
 
+private func makeTestTrackVersions() -> [TrackVersion] {
+    [
+        TrackVersion(title: "late night session", duration: 214, versionLabel: "Final Mix"),
+        TrackVersion(title: "late night session", duration: 187, versionLabel: "Demo v1"),
+        TrackVersion(title: "late night — acoustic", duration: 198, versionLabel: "Acoustic")
+    ]
+}
+
 private enum SeedData {
     static let userCity = "Sydney"
     static let currentArtist = artists[6]
@@ -2292,6 +3004,7 @@ private enum SeedData {
     static let posts: [Post] = {
         let seedAudio = makeSeedAudio()
         let testBloopers = makeTestBloopers()
+        let testVersions = makeTestTrackVersions()
 
         return [
         Post(
@@ -2308,6 +3021,7 @@ private enum SeedData {
             audioTitle: seedAudio.1,
             audioDuration: seedAudio.2,
             bloopers: testBloopers,
+            trackVersions: testVersions,
             isLandscape: false
         ),
         Post(
@@ -2324,6 +3038,7 @@ private enum SeedData {
             audioTitle: seedAudio.1,
             audioDuration: seedAudio.2,
             bloopers: testBloopers,
+            trackVersions: testVersions,
             isLandscape: true
         ),
         Post(
@@ -2340,6 +3055,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: false
         ),
         Post(
@@ -2356,6 +3072,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: true
         ),
         Post(
@@ -2372,6 +3089,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: false
         ),
         Post(
@@ -2388,6 +3106,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: false
         ),
         Post(
@@ -2404,6 +3123,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: true
         ),
         Post(
@@ -2420,6 +3140,7 @@ private enum SeedData {
             audioTitle: nil,
             audioDuration: nil,
             bloopers: [],
+            trackVersions: [],
             isLandscape: false
         )
     ]
@@ -2496,18 +3217,6 @@ private extension Font {
             name = "Inter-Bold"
         }
         return .custom(name, size: size)
-    }
-}
-
-private extension Color {
-    init(hex: String) {
-        let scanner = Scanner(string: hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted))
-        var value: UInt64 = 0
-        scanner.scanHexInt64(&value)
-        let red = Double((value >> 16) & 0xFF) / 255
-        let green = Double((value >> 8) & 0xFF) / 255
-        let blue = Double(value & 0xFF) / 255
-        self.init(red: red, green: green, blue: blue)
     }
 }
 
